@@ -3,10 +3,23 @@
 Local-first Python CLI to extract a **melody-focused** transcription from a YouTube URL and export:
 
 - MIDI (`.mid`) for MuseScore cleanup
-- note list (`notes.txt`) with optional Japanese solfege (ドレミ)
-- simple monophonic guitar TAB (`tab.txt`)
+- raw parsed notes (`notes_raw.txt`)
+- extracted monophonic melody notes (`notes_melody.txt`, plus compatibility `notes.txt`)
+- optimized monophonic guitar TAB (`tab.txt`)
+- optional melody scoring diagnostics (`melody_debug.txt`)
 
 > Intended for lawful personal analysis workflows only. Only process audio you have rights to use.
+
+## Why this post-processing stage exists
+
+Raw audio-to-MIDI transcription often contains:
+
+- accompaniment notes mixed with lead notes,
+- short noisy note fragments,
+- large octave jumps,
+- notes outside practical guitar range.
+
+The previous MVP mapped these raw notes directly to TAB note-by-note. That created many `x` placeholders and awkward jumps. The updated pipeline adds a dedicated melody extraction stage and a global TAB path optimizer to improve playability while keeping the architecture simple and local.
 
 ## MVP scope and limitations
 
@@ -14,7 +27,7 @@ This project is intentionally practical and melody-oriented:
 
 - Works best on humming, whistling, sung melody, and melody-dominant passages.
 - Not designed to perfectly transcribe dense polyphonic piano/chords.
-- Rhythm/timing can require manual cleanup after MIDI import into MuseScore.
+- Rhythm/timing can still require manual cleanup after MIDI import into MuseScore.
 - TAB output is heuristic ASCII TAB for monophonic melody, not Guitar Pro-grade fingering.
 
 ## Tech stack
@@ -37,11 +50,13 @@ src/melody_tab/
   audio.py
   transcribe.py
   notes.py
+  melody.py
   tab.py
   models.py
   utils.py
 tests/
   test_notes.py
+  test_melody.py
   test_tab.py
   test_cli_smoke.py
 README.md
@@ -92,28 +107,104 @@ melody-tab "https://youtube.com/watch?v=..." \
   --end 45 \
   --out-dir output \
   --japanese-solfege \
+  --melody-mode balanced \
+  --min-note-ms 90 \
+  --max-jump-semitones 12 \
   --lowest-fret 0 \
-  --highest-fret 15
+  --preferred-fret-max 12 \
+  --highest-fret 15 \
+  --octave-shift-outliers \
+  --debug-melody
 ```
 
-### CLI options
+## Pipeline
+
+1. Parse MIDI note events.
+2. Clean notes (drop short noise, merge repeats, range handling).
+3. Extract monophonic melody by scoring candidates per time slice.
+4. Generate candidate guitar positions for each melody note.
+5. Select full-phrase fingering path using dynamic programming.
+6. Render TAB and note/debug outputs.
+
+## Melody extraction heuristics
+
+Candidate scoring combines:
+
+- duration reward,
+- pitch-range reward,
+- mode preference (`highest`, `duration`, `balanced`),
+- continuity penalty for large pitch jumps.
+
+Pre-cleaning includes:
+
+- `--min-note-ms` filtering,
+- optional merging of repeated near-identical adjacent notes,
+- optional octave shifting into melody range,
+- dropping unplayable outliers.
+
+## TAB optimization heuristics
+
+For each melody note, all candidate (string, fret) positions in configured fret bounds are generated. A dynamic-programming pass minimizes global transition cost, preferring:
+
+- lower frets,
+- limited hand movement,
+- smaller string skips,
+- staying near local position windows,
+- avoiding frets above `--preferred-fret-max` unless needed.
+
+When a note has no playable position:
+
+- octave shift is attempted (if enabled), otherwise
+- a clear `x` marker is emitted.
+
+## CLI options
+
+Core:
 
 - positional `youtube_url`
 - `--start <seconds>` optional trim start
 - `--end <seconds>` optional trim end (must be greater than start)
 - `--out-dir <path>` output directory (default: `output`)
 - `--keep-intermediate` keep downloaded/intermediate audio files
-- `--japanese-solfege` include ドレミ text in `notes.txt`
-- `--lowest-fret <int>` minimum fret for TAB assignment (default `0`)
-- `--highest-fret <int>` maximum fret for TAB assignment (default `20`)
+- `--japanese-solfege` include ドレミ text in note files
+
+Melody controls:
+
+- `--melody-mode highest|duration|balanced` (default `balanced`)
+- `--min-note-ms <float>` (default `90`)
+- `--max-jump-semitones <int>` (default `12`)
+- `--octave-shift-outliers` enable octave-shift fallback
+- `--debug-melody` write `melody_debug.txt`
+
+TAB controls:
+
+- `--lowest-fret <int>` minimum fret (default `0`)
+- `--preferred-fret-max <int>` preferred upper fret before penalties (default `12`)
+- `--highest-fret <int>` hard maximum fret (default `20`)
 
 ## Output files
 
 In `--out-dir`:
 
 - `melody.mid`
-- `notes.txt`
-- `tab.txt`
+- `notes_raw.txt`
+- `notes_melody.txt`
+- `notes.txt` (compatibility copy of melody notes)
+- `tab.txt` (from melody notes only)
+- `melody_debug.txt` (if `--debug-melody`)
+
+`tab.txt` includes metadata header lines such as source URL, fret range, dropped-note count, and octave-shift count.
+
+## Recommended workflow
+
+For melody-heavy material:
+
+1. Clip a short melody-dominant section with `--start/--end`.
+2. Start with defaults + `--octave-shift-outliers`.
+3. If noisy, raise `--min-note-ms` (e.g., 120–160).
+4. If contour is too jumpy, lower `--max-jump-semitones`.
+5. Inspect `melody_debug.txt` and adjust mode/thresholds.
+6. Perform final polish in MuseScore if needed.
 
 ## Test
 
@@ -129,20 +220,16 @@ pytest
 - **`ffmpeg` not found**
   - Install ffmpeg and ensure it is in PATH.
 - **`basic-pitch` API mismatch / transcription errors**
-  - Some online examples use the Python API (`predict_and_save`) in ways that no longer match newer releases.
   - For MVP stability, this project uses the `basic-pitch` CLI instead of direct Python API calls.
   - Verify CLI availability in your active venv: `basic-pitch --help`
   - Reinstall dependencies in a clean Python 3.11 venv if CLI invocation fails.
-- **No notes detected**
+- **No notes detected / no melody left**
   - Use melody-dominant sections.
-  - Trim to a smaller range with clearer lead melody.
-- **TAB has `OUT` notes**
-  - Expand fret range using `--lowest-fret` / `--highest-fret`.
+  - Lower `--min-note-ms` if extraction is too strict.
 
-## Future improvements
+## Known limitations
 
-- Backend choice (`basic-pitch` / alternative melody estimators)
-- Better onset filtering and de-duplication for cleaner monophonic notes
-- Optional quantization and beat grid assistance
-- Better global optimization for guitar fingering
-- Optional direct local audio-file input mode
+- Heuristic extraction can still choose wrong notes in dense mixes.
+- Durations in `notes_melody.txt` are slice-based approximations.
+- TAB cost model is practical, not a full physical hand model.
+- Rhythmic notation is not quantized for score-perfect output.

@@ -16,6 +16,16 @@ def test_cli_parser_smoke():
         "1",
         "--highest-fret",
         "15",
+        "--melody-mode",
+        "balanced",
+        "--min-note-ms",
+        "100",
+        "--preferred-fret-max",
+        "11",
+        "--max-jump-semitones",
+        "10",
+        "--octave-shift-outliers",
+        "--debug-melody",
     ])
     assert args.youtube_url.startswith("https://youtube.com")
     assert args.start == 3
@@ -23,3 +33,5 @@ def test_cli_parser_smoke():
     assert args.japanese_solfege is True
     assert args.lowest_fret == 1
     assert args.highest_fret == 15
+    assert args.melody_mode == "balanced"
+    assert args.debug_melody is True
