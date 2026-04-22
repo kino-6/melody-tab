@@ -128,9 +128,11 @@ pytest
   - Retry with a shorter clip via `--start/--end`.
 - **`ffmpeg` not found**
   - Install ffmpeg and ensure it is in PATH.
-- **`basic-pitch` import/runtime failure**
-  - Reinstall dependencies in a clean Python 3.11 venv.
-  - Some systems may need updated `pip`, `setuptools`, and compatible wheels.
+- **`basic-pitch` API mismatch / transcription errors**
+  - Some online examples use the Python API (`predict_and_save`) in ways that no longer match newer releases.
+  - For MVP stability, this project uses the `basic-pitch` CLI instead of direct Python API calls.
+  - Verify CLI availability in your active venv: `basic-pitch --help`
+  - Reinstall dependencies in a clean Python 3.11 venv if CLI invocation fails.
 - **No notes detected**
   - Use melody-dominant sections.
   - Trim to a smaller range with clearer lead melody.
