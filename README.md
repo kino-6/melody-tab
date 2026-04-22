@@ -1,109 +1,145 @@
 # melody-tab
-Extract melody from audio (YouTube, humming, whistle) and convert it to MIDI, note names, and simple guitar TAB.
 
-# melody-tab
+Local-first Python CLI to extract a **melody-focused** transcription from a YouTube URL and export:
 
-Extract melody from audio (YouTube, humming, whistle) and convert it to MIDI, note names, and simple guitar TAB.
+- MIDI (`.mid`) for MuseScore cleanup
+- note list (`notes.txt`) with optional Japanese solfege (ドレミ)
+- simple monophonic guitar TAB (`tab.txt`)
 
----
+> Intended for lawful personal analysis workflows only. Only process audio you have rights to use.
 
-## ✨ Overview
+## MVP scope and limitations
 
-`melody-tab` is a local-first CLI tool for melody extraction.
+This project is intentionally practical and melody-oriented:
 
-It converts audio into structured musical data using an audio-to-MIDI pipeline.
+- Works best on humming, whistling, sung melody, and melody-dominant passages.
+- Not designed to perfectly transcribe dense polyphonic piano/chords.
+- Rhythm/timing can require manual cleanup after MIDI import into MuseScore.
+- TAB output is heuristic ASCII TAB for monophonic melody, not Guitar Pro-grade fingering.
 
-
-YouTube / audio
-↓
-audio extraction
-↓
-MIDI transcription
-↓
-note parsing
-↓
-TAB generation
-
-
----
-
-## 🎯 Use Cases
-
-- Transcribe humming or whistling into notes
-- Extract melody from YouTube clips
-- Quickly get note sequences without manual piano input
-- Generate rough guitar TAB from melody
-
----
-
-## 🧠 Key Concept
-
-This tool is based on:
-
-- **Automatic Music Transcription (AMT)**  
-  Converting audio signals into symbolic music (MIDI / notes)
-
-- **Pitch Detection**  
-  Estimating fundamental frequency from audio
-
----
-
-## ⚠️ Limitations
-
-- Designed for **monophonic (single-note) melody**
-- Polyphonic audio (e.g. full piano songs) may produce noisy results
-- Output may require manual cleanup in MuseScore or similar tools
-- TAB generation is heuristic-based, not optimal fingering
-
----
-
-## 🚀 Features (MVP)
-
-- YouTube audio extraction
-- WAV conversion
-- MIDI transcription
-- Note name extraction (C4, D#4)
-- Optional Japanese solfege (ドレミ)
-- Simple guitar TAB generation
-
----
-
-## 🔧 Requirements
+## Tech stack
 
 - Python 3.11
-- ffmpeg (required for audio processing)
+- `yt-dlp` for local audio download
+- `ffmpeg` for conversion/trimming
+- Spotify `basic-pitch` for audio-to-MIDI
+- `pretty-midi` for MIDI note parsing
 
----
+## Repository layout
 
-## 📦 Installation
-
-### Using pip
-```bash
-pip install -r requirements.txt
+```text
+pyproject.toml
+src/melody_tab/
+  __init__.py
+  __main__.py
+  cli.py
+  download.py
+  audio.py
+  transcribe.py
+  notes.py
+  tab.py
+  models.py
+  utils.py
+tests/
+  test_notes.py
+  test_tab.py
+  test_cli_smoke.py
+README.md
 ```
 
-Using uv (recommended)
-uv sync
-▶️ Usage
+## Prerequisites
 
-melody-tab "https://youtube.com/..." --start 30 --end 45
+Install `ffmpeg` first.
 
-Output:
-output.mid
-notes.txt
-tab.txt
-🛠 Architecture
-download.py — audio extraction (yt-dlp)
-audio.py — preprocessing / trimming
-transcribe.py — audio → MIDI
-notes.py — MIDI → note names
-tab.py — note → guitar TAB
-📌 Future Improvements
-Better polyphonic handling
-Rhythm quantization
-Multiple instrument support
-GUI / Web UI
-Guitar fingering optimization
-⚖️ Legal
+- macOS: `brew install ffmpeg`
+- Ubuntu/Debian: `sudo apt-get update && sudo apt-get install -y ffmpeg`
 
-Use only audio you have the right to process locally.
+## Install
+
+### Option A: uv (recommended)
+
+```bash
+uv venv
+source .venv/bin/activate
+uv pip install -e .
+uv pip install -e .[dev]
+```
+
+### Option B: pip
+
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -e .
+pip install -e .[dev]
+```
+
+## Usage
+
+### Module entrypoint
+
+```bash
+python -m melody_tab "https://youtube.com/watch?v=..."
+```
+
+### Script entrypoint
+
+```bash
+melody-tab "https://youtube.com/watch?v=..." \
+  --start 30 \
+  --end 45 \
+  --out-dir output \
+  --japanese-solfege \
+  --lowest-fret 0 \
+  --highest-fret 15
+```
+
+### CLI options
+
+- positional `youtube_url`
+- `--start <seconds>` optional trim start
+- `--end <seconds>` optional trim end (must be greater than start)
+- `--out-dir <path>` output directory (default: `output`)
+- `--keep-intermediate` keep downloaded/intermediate audio files
+- `--japanese-solfege` include ドレミ text in `notes.txt`
+- `--lowest-fret <int>` minimum fret for TAB assignment (default `0`)
+- `--highest-fret <int>` maximum fret for TAB assignment (default `20`)
+
+## Output files
+
+In `--out-dir`:
+
+- `melody.mid`
+- `notes.txt`
+- `tab.txt`
+
+## Test
+
+```bash
+pytest
+```
+
+## Troubleshooting
+
+- **`yt-dlp` failure / URL errors**
+  - Ensure URL is valid and accessible from your network.
+  - Retry with a shorter clip via `--start/--end`.
+- **`ffmpeg` not found**
+  - Install ffmpeg and ensure it is in PATH.
+- **`basic-pitch` import/runtime failure**
+  - Reinstall dependencies in a clean Python 3.11 venv.
+  - Some systems may need updated `pip`, `setuptools`, and compatible wheels.
+- **No notes detected**
+  - Use melody-dominant sections.
+  - Trim to a smaller range with clearer lead melody.
+- **TAB has `OUT` notes**
+  - Expand fret range using `--lowest-fret` / `--highest-fret`.
+
+## Future improvements
+
+- Backend choice (`basic-pitch` / alternative melody estimators)
+- Better onset filtering and de-duplication for cleaner monophonic notes
+- Optional quantization and beat grid assistance
+- Better global optimization for guitar fingering
+- Optional direct local audio-file input mode
