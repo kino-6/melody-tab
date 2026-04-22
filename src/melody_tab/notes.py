@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pretty_midi
 
 from melody_tab.models import NoteEvent
 
@@ -20,8 +21,6 @@ SOLFEGE_JP = {
 
 def midi_to_note_events(midi_path: Path) -> list[NoteEvent]:
     """Parse MIDI file and return sorted note events."""
-    import pretty_midi
-
     midi = pretty_midi.PrettyMIDI(str(midi_path))
     events: list[NoteEvent] = []
     for instrument in midi.instruments:
@@ -42,18 +41,25 @@ def note_to_japanese_solfege(note_name: str) -> str:
     return f"{base}{accidental}" if accidental else base
 
 
+def _note_name(midi: int, fallback_name: str) -> str:
+    if fallback_name and fallback_name != "X" and fallback_name[0].upper() in SOLFEGE_JP:
+        return fallback_name
+    return pretty_midi.note_number_to_name(midi)
+
+
 def format_notes_text(events: list[NoteEvent], japanese_solfege: bool = False) -> str:
     """Render events as newline-separated text."""
     lines: list[str] = []
     for ev in events:
-        row = f"{ev.name}\t(midi={ev.midi}, start={ev.onset:.3f}, dur={ev.duration:.3f})"
+        note_name = _note_name(ev.midi, ev.name)
+        row = f"{note_name}\t(midi={ev.midi}, start={ev.onset:.3f}, dur={ev.duration:.3f})"
         if japanese_solfege:
-            row += f"\t{note_to_japanese_solfege(ev.name)}"
+            row += f"\t{note_to_japanese_solfege(note_name)}"
         lines.append(row)
     return "\n".join(lines)
 
 
 def write_notes_file(events: list[NoteEvent], output_path: Path, japanese_solfege: bool = False) -> Path:
-    """Write notes.txt file."""
+    """Write notes file."""
     output_path.write_text(format_notes_text(events, japanese_solfege=japanese_solfege), encoding="utf-8")
     return output_path
