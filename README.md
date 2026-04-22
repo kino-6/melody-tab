@@ -62,7 +62,8 @@ Install `ffmpeg` first.
 uv venv
 source .venv/bin/activate
 uv pip install -e .
-uv pip install -e .[dev]
+uv pip install --upgrade "setuptools<82" "basic-pitch[onnx]"
+uv pip install -e '.[dev]'
 ```
 
 ### Option B: pip
