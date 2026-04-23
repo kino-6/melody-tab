@@ -31,6 +31,25 @@ def midi_to_note_events(midi_path: Path) -> list[NoteEvent]:
     return events
 
 
+def write_note_events_midi(events: list[NoteEvent], output_path: Path, *, tempo: float = 120.0) -> Path:
+    """Write note events to a simple single-track MIDI file."""
+    midi = pretty_midi.PrettyMIDI(initial_tempo=tempo)
+    instrument = pretty_midi.Instrument(program=0, name="Melody")
+    for ev in sorted(events, key=lambda e: (e.onset, e.midi)):
+        instrument.notes.append(
+            pretty_midi.Note(
+                velocity=96,
+                pitch=ev.midi,
+                start=float(ev.onset),
+                end=float(max(ev.onset + 0.01, ev.offset)),
+            )
+        )
+    midi.instruments.append(instrument)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    midi.write(str(output_path))
+    return output_path
+
+
 def note_to_japanese_solfege(note_name: str) -> str:
     """Convert note label (e.g., C#4) to Japanese solfege-friendly text."""
     letter = note_name[0].upper()

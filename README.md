@@ -2,11 +2,13 @@
 
 Local-first Python CLI to extract a **melody-focused** transcription from a YouTube URL and export:
 
-- MIDI (`.mid`) for MuseScore cleanup
+- raw transcription MIDI (`raw.mid`)
+- melody-only MIDI (`melody.mid`)
 - raw parsed notes (`notes_raw.txt`)
 - extracted monophonic melody notes (`notes_melody.txt`, plus compatibility `notes.txt`)
 - optimized monophonic guitar TAB (`tab.txt`)
-- optional melody scoring diagnostics (`melody_debug.txt`)
+- TAB preview MIDI reconstructed from TAB (`tab_preview.mid`)
+- comparison/debug artifacts (`compare_melody_vs_tab.txt`, `tab_parsed_notes.txt`, optional `melody_debug.txt`)
 
 > Intended for lawful personal analysis workflows only. Only process audio you have rights to use.
 
@@ -119,12 +121,14 @@ melody-tab "https://youtube.com/watch?v=..." \
 
 ## Pipeline
 
-1. Parse MIDI note events.
-2. Clean notes (drop short noise, merge repeats, range handling).
-3. Extract monophonic melody by scoring candidates per time slice.
-4. Generate candidate guitar positions for each melody note.
-5. Select full-phrase fingering path using dynamic programming.
-6. Render TAB and note/debug outputs.
+```text
+raw audio -> Basic Pitch -> raw.mid -> notes_raw.txt
+                         -> melody extraction -> melody.mid + notes_melody.txt
+                         -> TAB generation (melody-only) -> tab.txt
+                         -> TAB verification -> tab_preview.mid + compare_melody_vs_tab.txt
+```
+
+Stages are explicit so you can inspect each step independently and confirm TAB is generated from melody notes, not raw notes.
 
 ## Melody extraction heuristics
 
@@ -175,6 +179,9 @@ Melody controls:
 - `--max-jump-semitones <int>` (default `12`)
 - `--octave-shift-outliers` enable octave-shift fallback
 - `--debug-melody` write `melody_debug.txt`
+- `--[no-]write-melody-midi` write/skip `melody.mid` (default: write)
+- `--[no-]write-tab-preview-midi` write/skip `tab_preview.mid` (default: write)
+- `--[no-]write-compare-report` write/skip `compare_melody_vs_tab.txt` (default: write)
 
 TAB controls:
 
@@ -186,14 +193,17 @@ TAB controls:
 
 In `--out-dir`:
 
-- `melody.mid`
+- `raw.mid` (original Basic Pitch output)
+- `melody.mid` (generated only from extracted melody note events)
 - `notes_raw.txt`
 - `notes_melody.txt`
 - `notes.txt` (compatibility copy of melody notes)
-- `tab.txt` (from melody notes only)
+- `tab.txt` (generated from melody notes only)
+- `tab_preview.mid` (reconstructed from `tab.txt`)
+- `compare_melody_vs_tab.txt` (if comparison enabled)
 - `melody_debug.txt` (if `--debug-melody`)
 
-`tab.txt` includes metadata header lines such as source URL, fret range, dropped-note count, and octave-shift count.
+`tab.txt` includes metadata header lines such as source URL, fret range, dropped-note count, and octave-shift count. Runtime logs print stage counts (`raw`, `melody`, `tab`, `preview`) for quick verification.
 
 
 ## TAB-to-MIDI verification pipeline
@@ -229,7 +239,7 @@ This writes:
 
 - `preview.mid` (TAB-derived MIDI preview)
 - `tab_parsed_notes.txt` (string, fret, midi, pitch, tab-column debug table)
-- `tab_melody_comparison.txt` (if comparison mode enabled)
+- `compare_melody_vs_tab.txt` (if comparison mode enabled)
 
 ### Rhythm reconstruction limitations
 

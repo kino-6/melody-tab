@@ -9,8 +9,9 @@ from pathlib import Path
 from melody_tab.audio import convert_to_wav, trim_audio
 from melody_tab.download import download_audio
 from melody_tab.melody import MelodyConfig, extract_melody, format_melody_debug
-from melody_tab.notes import write_notes_file, midi_to_note_events
+from melody_tab.notes import midi_to_note_events, write_note_events_midi, write_notes_file
 from melody_tab.tab import TabConfig, write_tab_file
+from melody_tab.tab_parse import parse_tab_file
 from melody_tab.tab_to_midi import tab_to_midi_pipeline
 from melody_tab.transcribe import transcribe_wav_to_midi
 from melody_tab.utils import setup_logging
@@ -43,6 +44,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-jump-semitones", type=int, default=12, help="Pitch jump threshold before continuity penalty")
     p.add_argument("--octave-shift-outliers", action="store_true", help="Try octave-shifting out-of-range notes")
     p.add_argument("--debug-melody", action="store_true", help="Write melody_debug.txt with scoring details")
+
+    p.add_argument("--write-melody-midi", action=argparse.BooleanOptionalAction, default=True, help="Write melody.mid")
+    p.add_argument(
+        "--write-tab-preview-midi",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Write tab_preview.mid from tab.txt",
+    )
+    p.add_argument(
+        "--write-compare-report",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Write compare_melody_vs_tab.txt report",
+    )
     return p
 
 
@@ -59,19 +74,23 @@ def run_pipeline(args: argparse.Namespace) -> int:
     raw_audio = out_dir / "source_audio"
     raw_wav = out_dir / "source.wav"
     trimmed_wav = out_dir / "source_trimmed.wav"
-    midi_path = out_dir / "melody.mid"
+
+    raw_midi_path = out_dir / "raw.mid"
+    melody_midi_path = out_dir / "melody.mid"
     notes_raw_path = out_dir / "notes_raw.txt"
     notes_melody_path = out_dir / "notes_melody.txt"
     notes_compat_path = out_dir / "notes.txt"
     tab_path = out_dir / "tab.txt"
+    tab_preview_path = out_dir / "tab_preview.mid"
+    compare_path = out_dir / "compare_melody_vs_tab.txt"
     debug_path = out_dir / "melody_debug.txt"
 
     downloaded = download_audio(args.youtube_url, out_dir=out_dir, basename=raw_audio.name)
     wav = convert_to_wav(downloaded, raw_wav)
     prepared = trim_audio(wav, trimmed_wav, start=args.start, end=args.end)
-    transcribe_wav_to_midi(prepared, midi_path)
+    transcribe_wav_to_midi(prepared, raw_midi_path)
 
-    raw_events = midi_to_note_events(midi_path)
+    raw_events = midi_to_note_events(raw_midi_path)
     if not raw_events:
         raise RuntimeError("No notes were detected in transcription. Try a clearer melody or narrower clip.")
 
@@ -89,6 +108,8 @@ def run_pipeline(args: argparse.Namespace) -> int:
     write_notes_file(raw_events, notes_raw_path, japanese_solfege=args.japanese_solfege)
     write_notes_file(melody_events, notes_melody_path, japanese_solfege=args.japanese_solfege)
     write_notes_file(melody_events, notes_compat_path, japanese_solfege=args.japanese_solfege)
+    if args.write_melody_midi:
+        write_note_events_midi(melody_events, melody_midi_path)
 
     tab_cfg = TabConfig(
         lowest_fret=args.lowest_fret,
@@ -97,27 +118,60 @@ def run_pipeline(args: argparse.Namespace) -> int:
         octave_shift_outliers=args.octave_shift_outliers,
     )
     _, tab_stats = write_tab_file(melody_events, tab_path, config=tab_cfg, source=args.youtube_url)
+    tab_events = parse_tab_file(tab_path)
+
+    preview_result = None
+    if args.write_tab_preview_midi:
+        preview_result = tab_to_midi_pipeline(
+            tab_path=tab_path,
+            out_path=tab_preview_path,
+            step_beats=args.step_beats,
+            tempo=args.tempo,
+            timing_from_notes=notes_melody_path,
+            compare_with_notes=notes_melody_path if args.write_compare_report else None,
+            comparison_out=compare_path,
+        )
 
     if args.debug_melody:
         debug_path.write_text(format_melody_debug(decisions, cleanup_debug), encoding="utf-8")
 
     LOGGER.info(
-        "Done. Wrote files:\n- %s\n- %s\n- %s\n- %s\nMelody stats: raw=%d dropped_short=%d merged=%d mel_oct_shift=%d mel_drop=%d tab_drop=%d tab_oct_shift=%d",
-        midi_path,
+        (
+            "Stage summary: raw notes parsed=%d | melody notes selected=%d | tab notes emitted=%d | "
+            "preview MIDI notes emitted=%d"
+        ),
+        len(raw_events),
+        len(melody_events),
+        len(tab_events),
+        preview_result.preview_note_count if preview_result else 0,
+    )
+    LOGGER.info(
+        (
+            "Verification stats: raw=%d melody=%d tab-events=%d dropped=%d octave-shifted=%d "
+            "(melody-shift=%d tab-shift=%d)"
+        ),
+        len(raw_events),
+        len(melody_events),
+        len(tab_events),
+        tab_stats.dropped_notes,
+        melody_stats.octave_shifted + tab_stats.octave_shifted,
+        melody_stats.octave_shifted,
+        tab_stats.octave_shifted,
+    )
+    LOGGER.info(
+        "Done. Wrote files:\n- %s\n- %s\n- %s\n- %s\n- %s\n- %s%s%s",
+        raw_midi_path,
         notes_raw_path,
+        melody_midi_path if args.write_melody_midi else "(skipped melody.mid)",
         notes_melody_path,
         tab_path,
-        melody_stats.raw_notes,
-        melody_stats.dropped_short,
-        melody_stats.merged_repeats,
-        melody_stats.octave_shifted,
-        melody_stats.dropped_unplayable,
-        tab_stats.dropped_notes,
-        tab_stats.octave_shifted,
+        tab_preview_path if args.write_tab_preview_midi else "(skipped tab_preview.mid)",
+        f"\n- {compare_path}" if args.write_tab_preview_midi and args.write_compare_report else "",
+        f"\n- {debug_path}" if args.debug_melody else "",
     )
 
     if not args.keep_intermediate:
-        if downloaded.exists() and downloaded != midi_path:
+        if downloaded.exists() and downloaded != raw_midi_path:
             downloaded.unlink(missing_ok=True)
         if raw_wav.exists() and raw_wav != prepared:
             raw_wav.unlink(missing_ok=True)
