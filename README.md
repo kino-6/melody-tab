@@ -168,7 +168,7 @@ Core:
 - positional `youtube_url`
 - `--start <seconds>` optional trim start
 - `--end <seconds>` optional trim end (must be greater than start)
-- `--out-dir <path>` output directory (default: `output`)
+- `--out-dir <path>` parent output directory (default: `output`, with per-run subdirectories)
 - `--keep-intermediate` keep downloaded/intermediate audio files
 - `--japanese-solfege` include ドレミ text in note files
 
@@ -191,7 +191,21 @@ TAB controls:
 
 ## Output files
 
-In `--out-dir`:
+Each run now writes into a dedicated subdirectory under `--out-dir`:
+
+```text
+<out-dir>/<YYYYMMDD_HHMMSS__safe_title>/
+```
+
+Example:
+
+```text
+output/20260423_120512__Ado_Odo/
+```
+
+This keeps iterative experiments separated, so you can run the same source with different trim/melody/tab settings without mixing artifacts from different attempts.
+
+Within each run directory:
 
 - `raw.mid` (original Basic Pitch output)
 - `melody.mid` (generated only from extracted melody note events)
@@ -202,6 +216,7 @@ In `--out-dir`:
 - `tab_preview.mid` (reconstructed from `tab.txt`)
 - `compare_melody_vs_tab.txt` (if comparison enabled)
 - `melody_debug.txt` (if `--debug-melody`)
+- `run_meta.json` (timestamp/source/settings/artifact traceability)
 
 `tab.txt` includes metadata header lines such as source URL, fret range, dropped-note count, and octave-shift count. Runtime logs print stage counts (`raw`, `melody`, `tab`, `preview`) for quick verification.
 

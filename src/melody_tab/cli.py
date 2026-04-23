@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import argparse
 import logging
+from datetime import datetime
 from pathlib import Path
 
 from melody_tab.audio import convert_to_wav, trim_audio
-from melody_tab.download import download_audio
+from melody_tab.download import download_audio, fetch_source_metadata
 from melody_tab.melody import MelodyConfig, extract_melody, format_melody_debug
 from melody_tab.notes import midi_to_note_events, write_note_events_midi, write_notes_file
+from melody_tab.output import create_run_output_dir, sanitize_title, write_run_meta
 from melody_tab.tab import TabConfig, write_tab_file
 from melody_tab.tab_parse import parse_tab_file
 from melody_tab.tab_to_midi import tab_to_midi_pipeline
@@ -63,13 +65,21 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run_pipeline(args: argparse.Namespace) -> int:
     """Run end-to-end transcription pipeline."""
-    out_dir = Path(args.out_dir).resolve()
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_parent_dir = Path(args.out_dir).resolve()
+    out_parent_dir.mkdir(parents=True, exist_ok=True)
 
     if args.start is not None and args.end is not None and args.start >= args.end:
         raise ValueError("Invalid trim range: --start must be less than --end")
     if args.lowest_fret > args.highest_fret:
         raise ValueError("--lowest-fret cannot be greater than --highest-fret")
+
+    source_meta = fetch_source_metadata(args.youtube_url)
+    safe_title = sanitize_title(source_meta.source_title)
+    run_timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    out_dir = create_run_output_dir(out_parent_dir, safe_title)
+
+    LOGGER.info("Source title: %s", source_meta.source_title or "(unknown)")
+    LOGGER.info("Run output directory: %s", out_dir)
 
     raw_audio = out_dir / "source_audio"
     raw_wav = out_dir / "source.wav"
@@ -84,6 +94,38 @@ def run_pipeline(args: argparse.Namespace) -> int:
     tab_preview_path = out_dir / "tab_preview.mid"
     compare_path = out_dir / "compare_melody_vs_tab.txt"
     debug_path = out_dir / "melody_debug.txt"
+    run_meta_path = out_dir / "run_meta.json"
+
+    run_meta: dict[str, object] = {
+        "timestamp": run_timestamp,
+        "source_url": source_meta.source_url,
+        "source_title": source_meta.source_title,
+        "safe_title": safe_title,
+        "output_dir": str(out_dir),
+        "cli_parameters": vars(args),
+        "trim_range": (
+            {"start": args.start, "end": args.end}
+            if args.start is not None or args.end is not None
+            else None
+        ),
+        "melody_settings": {
+            "mode": args.melody_mode,
+            "min_note_ms": args.min_note_ms,
+            "max_jump_semitones": args.max_jump_semitones,
+            "octave_shift_outliers": args.octave_shift_outliers,
+            "debug_melody": args.debug_melody,
+            "write_melody_midi": args.write_melody_midi,
+        },
+        "tab_settings": {
+            "lowest_fret": args.lowest_fret,
+            "preferred_fret_max": args.preferred_fret_max,
+            "highest_fret": args.highest_fret,
+            "write_tab_preview_midi": args.write_tab_preview_midi,
+            "write_compare_report": args.write_compare_report,
+            "tempo": args.tempo,
+            "step_beats": args.step_beats,
+        },
+    }
 
     downloaded = download_audio(args.youtube_url, out_dir=out_dir, basename=raw_audio.name)
     wav = convert_to_wav(downloaded, raw_wav)
@@ -135,6 +177,20 @@ def run_pipeline(args: argparse.Namespace) -> int:
     if args.debug_melody:
         debug_path.write_text(format_melody_debug(decisions, cleanup_debug), encoding="utf-8")
 
+    artifacts = {
+        "raw_midi": str(raw_midi_path),
+        "notes_raw": str(notes_raw_path),
+        "notes_melody": str(notes_melody_path),
+        "notes_compat": str(notes_compat_path),
+        "tab": str(tab_path),
+        "melody_midi": str(melody_midi_path) if args.write_melody_midi else None,
+        "tab_preview_midi": str(tab_preview_path) if args.write_tab_preview_midi else None,
+        "compare_report": str(compare_path) if args.write_tab_preview_midi and args.write_compare_report else None,
+        "melody_debug": str(debug_path) if args.debug_melody else None,
+    }
+    run_meta["artifacts"] = artifacts
+    write_run_meta(out_dir, run_meta)
+
     LOGGER.info(
         (
             "Stage summary: raw notes parsed=%d | melody notes selected=%d | tab notes emitted=%d | "
@@ -159,7 +215,7 @@ def run_pipeline(args: argparse.Namespace) -> int:
         tab_stats.octave_shifted,
     )
     LOGGER.info(
-        "Done. Wrote files:\n- %s\n- %s\n- %s\n- %s\n- %s\n- %s%s%s",
+        "Done. Wrote files:\n- %s\n- %s\n- %s\n- %s\n- %s\n- %s%s%s\n- %s",
         raw_midi_path,
         notes_raw_path,
         melody_midi_path if args.write_melody_midi else "(skipped melody.mid)",
@@ -168,6 +224,7 @@ def run_pipeline(args: argparse.Namespace) -> int:
         tab_preview_path if args.write_tab_preview_midi else "(skipped tab_preview.mid)",
         f"\n- {compare_path}" if args.write_tab_preview_midi and args.write_compare_report else "",
         f"\n- {debug_path}" if args.debug_melody else "",
+        run_meta_path,
     )
 
     if not args.keep_intermediate:
