@@ -11,6 +11,7 @@ from melody_tab.download import download_audio
 from melody_tab.melody import MelodyConfig, extract_melody, format_melody_debug
 from melody_tab.notes import write_notes_file, midi_to_note_events
 from melody_tab.tab import TabConfig, write_tab_file
+from melody_tab.tab_to_midi import tab_to_midi_pipeline
 from melody_tab.transcribe import transcribe_wav_to_midi
 from melody_tab.utils import setup_logging
 
@@ -20,7 +21,7 @@ LOGGER = logging.getLogger(__name__)
 def build_parser() -> argparse.ArgumentParser:
     """Create argument parser."""
     p = argparse.ArgumentParser(description="Extract melody from YouTube/audio and output MIDI, notes, and guitar TAB.")
-    p.add_argument("youtube_url", help="YouTube URL to download and process")
+    p.add_argument("youtube_url", nargs="?", help="YouTube URL to download and process")
     p.add_argument("--start", type=float, default=None, help="Start seconds for trimming")
     p.add_argument("--end", type=float, default=None, help="End seconds for trimming")
     p.add_argument("--out-dir", default="output", help="Output directory (default: output)")
@@ -28,6 +29,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--japanese-solfege", action="store_true", help="Include ドレミ naming in notes files")
     p.add_argument("--lowest-fret", type=int, default=0, help="Lowest allowed fret for tab generation")
     p.add_argument("--highest-fret", type=int, default=20, help="Highest allowed fret for tab generation")
+
+    p.add_argument("--tab-to-midi", default=None, help="Convert an existing tab.txt into a MIDI preview")
+    p.add_argument("--out", default=None, help="Output MIDI path for --tab-to-midi mode")
+    p.add_argument("--step-beats", type=float, default=0.5, help="Step duration in beats for TAB-to-MIDI mode")
+    p.add_argument("--tempo", type=float, default=120.0, help="Tempo for TAB-to-MIDI mode")
+    p.add_argument("--timing-from-notes", default=None, help="Use notes_melody.txt timing for TAB-to-MIDI alignment")
+    p.add_argument("--compare-with-notes", default=None, help="Compare tab-derived notes to notes_melody.txt")
 
     p.add_argument("--melody-mode", choices=["highest", "duration", "balanced"], default="balanced")
     p.add_argument("--min-note-ms", type=float, default=90.0, help="Minimum note length to keep")
@@ -119,6 +127,34 @@ def run_pipeline(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_tab_to_midi_mode(args: argparse.Namespace) -> int:
+    """Run TAB->MIDI verification/export mode."""
+    tab_path = Path(args.tab_to_midi).resolve()
+    if not tab_path.exists():
+        raise FileNotFoundError(f"TAB file not found: {tab_path}")
+
+    out_path = Path(args.out).resolve() if args.out else tab_path.with_name("preview.mid")
+    timing_path = Path(args.timing_from_notes).resolve() if args.timing_from_notes else None
+    compare_path = Path(args.compare_with_notes).resolve() if args.compare_with_notes else None
+
+    result = tab_to_midi_pipeline(
+        tab_path=tab_path,
+        out_path=out_path,
+        step_beats=args.step_beats,
+        tempo=args.tempo,
+        timing_from_notes=timing_path,
+        compare_with_notes=compare_path,
+    )
+
+    LOGGER.info(
+        "TAB-to-MIDI complete. Wrote files:\n- %s\n- %s%s",
+        result.midi_path,
+        result.debug_path,
+        f"\n- {result.comparison_path}" if result.comparison_path else "",
+    )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entrypoint."""
     setup_logging()
@@ -126,6 +162,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        if args.tab_to_midi:
+            return run_tab_to_midi_mode(args)
+        if not args.youtube_url:
+            parser.error("youtube_url is required unless --tab-to-midi is used")
         return run_pipeline(args)
     except Exception as exc:
         LOGGER.error("melody-tab failed: %s", exc)

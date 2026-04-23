@@ -195,6 +195,59 @@ In `--out-dir`:
 
 `tab.txt` includes metadata header lines such as source URL, fret range, dropped-note count, and octave-shift count.
 
+
+## TAB-to-MIDI verification pipeline
+
+This repository now includes a reverse conversion step for verification:
+
+`ASCII TAB -> MIDI preview`
+
+Why it helps:
+
+- lets you listen to generated TAB and quickly catch wrong pitches,
+- creates a practical feedback loop for TAB quality,
+- supports future regression checks by comparing TAB-derived notes to `notes_melody.txt`.
+
+### Quick command
+
+```bash
+melody-tab --tab-to-midi output/tab.txt --out output/preview.mid
+```
+
+Optional timing and comparison helpers:
+
+```bash
+melody-tab --tab-to-midi output/tab.txt \
+  --out output/preview.mid \
+  --tempo 120 \
+  --step-beats 0.5 \
+  --timing-from-notes output/notes_melody.txt \
+  --compare-with-notes output/notes_melody.txt
+```
+
+This writes:
+
+- `preview.mid` (TAB-derived MIDI preview)
+- `tab_parsed_notes.txt` (string, fret, midi, pitch, tab-column debug table)
+- `tab_melody_comparison.txt` (if comparison mode enabled)
+
+### Rhythm reconstruction limitations
+
+ASCII TAB primarily stores horizontal ordering, not exact note lengths. The TAB-to-MIDI exporter therefore uses:
+
+- constant step timing by default (`--tempo`, `--step-beats`), or
+- timing borrowed from `notes_melody.txt` when available (`--timing-from-notes`).
+
+This mode is meant for practical pitch verification, not perfect rhythmic score recovery.
+
+### Recommended verification workflow
+
+1. Generate melody notes (`notes_melody.txt`).
+2. Generate TAB (`tab.txt`).
+3. Convert TAB back to MIDI preview (`--tab-to-midi`).
+4. Listen and compare with intended melody.
+5. Inspect `tab_parsed_notes.txt` / comparison report for mismatches.
+
 ## Recommended workflow
 
 For melody-heavy material:
