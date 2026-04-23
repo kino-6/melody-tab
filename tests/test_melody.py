@@ -34,3 +34,26 @@ def test_out_of_range_shift_or_skip():
     melody_no_shift, stats_no_shift, *_ = extract_melody(events, MelodyConfig(octave_shift_outliers=False, min_note_ms=10))
     assert len(melody_no_shift) == 0
     assert stats_no_shift.dropped_unplayable == 2
+
+
+def test_continuity_prefers_smoother_pitch_path():
+    events = [
+        _ev(60, 0.0, 0.30),
+        _ev(79, 0.0, 0.30),
+        _ev(62, 0.1, 0.40),
+        _ev(81, 0.1, 0.40),
+        _ev(64, 0.2, 0.50),
+        _ev(83, 0.2, 0.50),
+    ]
+    melody, *_ = extract_melody(events, MelodyConfig(min_note_ms=10, time_slice_ms=100))
+    chosen = [n.midi for n in melody]
+    assert chosen[:3] == [60, 62, 64]
+
+
+def test_preferred_range_penalizes_extreme_notes():
+    events = [
+        _ev(60, 0.0, 0.25),
+        _ev(90, 0.0, 0.25),
+    ]
+    melody, *_ = extract_melody(events, MelodyConfig(min_note_ms=10, time_slice_ms=120))
+    assert melody[0].midi == 60

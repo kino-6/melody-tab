@@ -18,6 +18,11 @@ class MelodyConfig:
     mode: Literal["highest", "duration", "balanced"] = "balanced"
     min_note_ms: float = 90.0
     max_jump_semitones: int = 12
+    preferred_low_midi: int = 55
+    preferred_high_midi: int = 75
+    duration_weight: float = 2.8
+    jump_penalty_weight: float = 0.22
+    out_of_range_penalty_weight: float = 0.7
     octave_shift_outliers: bool = True
     merge_gap_ms: float = 60.0
     time_slice_ms: float = 70.0
@@ -125,46 +130,56 @@ def _build_time_slices(events: list[NoteEvent], slice_sec: float) -> list[tuple[
     return slices
 
 
+def _out_of_range_penalty(cand_midi: int, preferred_low: int, preferred_high: int, penalty_weight: float) -> float:
+    if preferred_low <= cand_midi <= preferred_high:
+        return 0.0
+    if cand_midi < preferred_low:
+        return (preferred_low - cand_midi) * penalty_weight
+    return (cand_midi - preferred_high) * penalty_weight
+
+
 def _score_candidate(
     cand: NoteEvent,
-    prev_midi: int | None,
     config: MelodyConfig,
-    low: int,
-    high: int,
 ) -> tuple[float, list[str]]:
     details: list[str] = []
     score = 0.0
 
-    dur_score = min(1.5, cand.duration * 2.0)
+    dur_score = cand.duration * config.duration_weight
     score += dur_score
     details.append(f"dur={dur_score:.2f}")
 
-    center = (low + high) / 2.0
-    dist = abs(cand.midi - center)
-    range_score = max(0.0, 1.3 - (dist / ((high - low) / 2)))
-    score += range_score
-    details.append(f"range={range_score:.2f}")
+    range_pen = _out_of_range_penalty(
+        cand_midi=cand.midi,
+        preferred_low=config.preferred_low_midi,
+        preferred_high=config.preferred_high_midi,
+        penalty_weight=config.out_of_range_penalty_weight,
+    )
+    score -= range_pen
+    details.append(f"range_pen=-{range_pen:.2f}")
 
     if config.mode == "highest":
-        high_bonus = ((cand.midi - low) / max(1.0, high - low)) * 2.5
+        high_bonus = cand.midi * 0.04
         score += high_bonus
         details.append(f"highest={high_bonus:.2f}")
     elif config.mode == "duration":
-        duration_bonus = min(1.0, cand.duration * 3.0)
+        duration_bonus = cand.duration * 0.6
         score += duration_bonus
         details.append(f"dur_mode={duration_bonus:.2f}")
     else:
-        bal_bonus = ((cand.midi - center) / max(1.0, high - low)) * 0.3
+        center = (config.preferred_low_midi + config.preferred_high_midi) / 2.0
+        bal_bonus = max(0.0, 0.4 - (abs(cand.midi - center) * 0.04))
         score += bal_bonus
         details.append(f"bal_pitch={bal_bonus:.2f}")
 
-    if prev_midi is not None:
-        jump = abs(cand.midi - prev_midi)
-        jump_pen = max(0.0, (jump - config.max_jump_semitones) * 0.22)
-        score -= jump_pen
-        details.append(f"jump_pen=-{jump_pen:.2f}")
-
     return score, details
+
+
+def _jump_penalty(curr_midi: int, prev_midi: int, config: MelodyConfig) -> float:
+    jump = abs(curr_midi - prev_midi)
+    base_penalty = jump * config.jump_penalty_weight
+    overflow_penalty = max(0, jump - config.max_jump_semitones) * (config.jump_penalty_weight * 2.0)
+    return base_penalty + overflow_penalty
 
 
 def extract_melody(
@@ -179,20 +194,40 @@ def extract_melody(
 
     decisions: list[MelodyDecision] = []
     melody_points: list[tuple[float, int]] = []
-    prev_midi: int | None = None
 
-    for slice_start, candidates in slices:
-        best_note: NoteEvent | None = None
-        best_score = -1e9
+    if not slices:
+        return [], stats, decisions, cleanup_debug
+
+    dp: list[list[float]] = []
+    back: list[list[int]] = []
+
+    for i, (slice_start, candidates) in enumerate(slices):
+        row_scores = [-1e18] * len(candidates)
+        row_back = [-1] * len(candidates)
         score_rows: list[str] = []
-        for cand in candidates:
-            score, details = _score_candidate(cand, prev_midi=prev_midi, config=config, low=low, high=high)
-            score_rows.append(f"midi={cand.midi} score={score:.2f} ({', '.join(details)})")
-            if score > best_score:
-                best_score = score
-                best_note = cand
+        for j, cand in enumerate(candidates):
+            base_score, details = _score_candidate(cand, config=config)
+            if i == 0:
+                row_scores[j] = base_score
+            else:
+                best_prev_score = -1e18
+                best_prev_idx = -1
+                for k, prev_cand in enumerate(slices[i - 1][1]):
+                    jump_pen = _jump_penalty(cand.midi, prev_cand.midi, config)
+                    total = dp[i - 1][k] + base_score - jump_pen
+                    if total > best_prev_score:
+                        best_prev_score = total
+                        best_prev_idx = k
+                row_scores[j] = best_prev_score
+                row_back[j] = best_prev_idx
+                details.append(f"jump_pen=-{_jump_penalty(cand.midi, slices[i - 1][1][best_prev_idx].midi, config):.2f}")
 
-        selected = best_note.midi if best_note else None
+            score_rows.append(f"midi={cand.midi} score={row_scores[j]:.2f} ({', '.join(details)})")
+
+        dp.append(row_scores)
+        back.append(row_back)
+        best_idx = max(range(len(candidates)), key=lambda idx: row_scores[idx])
+        selected = candidates[best_idx].midi if candidates else None
         decisions.append(
             MelodyDecision(
                 slice_start=slice_start,
@@ -201,10 +236,20 @@ def extract_melody(
                 score_details=score_rows,
             )
         )
-        if selected is not None:
-            if not melody_points or melody_points[-1][1] != selected:
-                melody_points.append((slice_start, selected))
-                prev_midi = selected
+
+    final_i = len(slices) - 1
+    final_j = max(range(len(slices[final_i][1])), key=lambda idx: dp[final_i][idx])
+    chosen_per_slice: list[int] = [0] * len(slices)
+    j = final_j
+    for i in range(final_i, -1, -1):
+        chosen_per_slice[i] = j
+        j = back[i][j] if i > 0 else -1
+
+    for i, (slice_start, candidates) in enumerate(slices):
+        selected = candidates[chosen_per_slice[i]].midi
+        decisions[i].selected_midi = selected
+        if not melody_points or melody_points[-1][1] != selected:
+            melody_points.append((slice_start, selected))
 
     # rebuild note events from selected melody points
     melody: list[NoteEvent] = []
