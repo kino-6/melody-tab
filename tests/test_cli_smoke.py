@@ -35,3 +35,6 @@ def test_cli_parser_smoke():
     assert args.highest_fret == 15
     assert args.melody_mode == "balanced"
     assert args.debug_melody is True
+    assert args.write_melody_midi is True
+    assert args.write_tab_preview_midi is True
+    assert args.write_compare_report is True

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 import re
@@ -25,8 +25,10 @@ class TimedNote:
 class ComparisonResult:
     tab_note_count: int
     melody_note_count: int
-    mismatched_pitches: int
-    octave_differences: int
+    pitch_mismatches: int
+    octave_mismatches: int
+    missing_notes: int
+    extra_notes: int
 
 
 @dataclass(slots=True)
@@ -34,6 +36,7 @@ class TabToMidiOutput:
     midi_path: Path
     debug_path: Path
     comparison_path: Path | None
+    preview_note_count: int
 
 
 def load_notes_timing(notes_path: Path) -> list[TimedNote]:
@@ -123,21 +126,22 @@ def compare_melody_to_tab(tab_notes: list[TimedNote], melody_notes: list[TimedNo
     tab_seq = [n.midi for n in sorted(tab_notes, key=lambda x: (x.start, x.midi))]
     mel_seq = [n.midi for n in sorted(melody_notes, key=lambda x: (x.start, x.midi))]
 
-    mismatched = 0
-    octave_diffs = 0
-    for t, m in zip(tab_seq, mel_seq):
-        if t != m:
-            mismatched += 1
-            if t % 12 == m % 12:
-                octave_diffs += 1
+    zipped = list(zip(tab_seq, mel_seq))
+    pitch_mismatches = sum(1 for t, m in zipped if t % 12 != m % 12)
+    octave_mismatches = sum(1 for t, m in zipped if t != m and t % 12 == m % 12)
 
-    mismatched += abs(len(tab_seq) - len(mel_seq))
+    tab_counts = Counter(tab_seq)
+    mel_counts = Counter(mel_seq)
+    missing_notes = sum(max(0, mel_counts[p] - tab_counts[p]) for p in mel_counts)
+    extra_notes = sum(max(0, tab_counts[p] - mel_counts[p]) for p in tab_counts)
 
     return ComparisonResult(
         tab_note_count=len(tab_seq),
         melody_note_count=len(mel_seq),
-        mismatched_pitches=mismatched,
-        octave_differences=octave_diffs,
+        pitch_mismatches=pitch_mismatches,
+        octave_mismatches=octave_mismatches,
+        missing_notes=missing_notes,
+        extra_notes=extra_notes,
     )
 
 
@@ -147,8 +151,10 @@ def format_comparison(result: ComparisonResult) -> str:
             "# TAB vs melody comparison",
             f"tab-note-count: {result.tab_note_count}",
             f"melody-note-count: {result.melody_note_count}",
-            f"mismatched-pitches: {result.mismatched_pitches}",
-            f"octave-differences: {result.octave_differences}",
+            f"pitch-mismatches: {result.pitch_mismatches}",
+            f"octave-mismatches: {result.octave_mismatches}",
+            f"missing-notes: {result.missing_notes}",
+            f"extra-notes: {result.extra_notes}",
         ]
     )
 
@@ -176,7 +182,12 @@ def tab_to_midi_pipeline(
     if compare_with_notes:
         melody_notes = load_notes_timing(compare_with_notes)
         result = compare_melody_to_tab(timed_notes, melody_notes)
-        comparison_file = comparison_out or out_path.with_name("tab_melody_comparison.txt")
+        comparison_file = comparison_out or out_path.with_name("compare_melody_vs_tab.txt")
         comparison_file.write_text(format_comparison(result), encoding="utf-8")
 
-    return TabToMidiOutput(midi_path=out_path, debug_path=debug_file, comparison_path=comparison_file)
+    return TabToMidiOutput(
+        midi_path=out_path,
+        debug_path=debug_file,
+        comparison_path=comparison_file,
+        preview_note_count=len(timed_notes),
+    )
